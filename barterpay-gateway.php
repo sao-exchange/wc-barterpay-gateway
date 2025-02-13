@@ -138,7 +138,7 @@ function init_barterpay_gateway()
                     'title' => __('Instructions', 'barterpay'),
                     'type' => 'textarea',
                     'description' => __('Instructions that will be added to the thank you page.', 'barterpay'),
-                    'default' => __('Pay with cash upon delivery.', 'barterpay'),
+                    'default' => __('Pay with Cards via BarterPay payments gateway.', 'barterpay'),
                     'desc_tip' => true,
                 ),
                 'enable_for_methods' => array(
@@ -468,54 +468,73 @@ function init_barterpay_gateway()
 } // End init_barterpay_gateway
 
 add_action('init', 'barterpay_callback_handler');
-function barterpay_callback_handler()
-{
-    if (isset($_GET['barterpay_callback'])) {
-        // Read the raw POST input.
-        $input = file_get_contents('php://input');
-        $data = json_decode($input, true);
+function barterpay_callback_handler() {
+    if ( isset( $_GET['barterpay_callback'] ) ) {
 
-        if (!$data || !isset($data['data'])) {
+        // Attempt to read JSON payload.
+        $input = file_get_contents('php://input');
+        $data  = json_decode( $input, true );
+
+        if ( $data && isset( $data['data'] ) ) {
+            $callback_data = $data['data'];
+            $external_transaction_id = isset( $callback_data['ExternalTransactionId'] ) ? sanitize_text_field( $callback_data['ExternalTransactionId'] ) : '';
+            $transaction_index       = isset( $callback_data['TransactionIndex'] ) ? sanitize_text_field( $callback_data['TransactionIndex'] ) : '';
+            $transaction_status      = isset( $callback_data['TransactionStatus'] ) ? sanitize_text_field( $callback_data['TransactionStatus'] ) : '';
+            $transaction_amount      = isset( $callback_data['TransactionAmount'] ) ? floatval( $callback_data['TransactionAmount'] ) : 0;
+        } elseif ( isset( $_GET['externalTransactionId'] ) ) {
+            // Fallback: Data is sent via GET parameters.
+            $external_transaction_id = sanitize_text_field( $_GET['externalTransactionId'] );
+            $transaction_index       = isset( $_GET['transactionId'] ) ? sanitize_text_field( $_GET['transactionId'] ) : '';
+            $transaction_status      = isset( $_GET['transactionStatus'] ) ? sanitize_text_field( $_GET['transactionStatus'] ) : '';
+            $transaction_amount      = isset( $_GET['transactionAmount'] ) ? floatval( $_GET['transactionAmount'] ) : 0;
+        } else {
             echo 'Invalid callback data';
             exit;
         }
 
-        $callback_data = $data['data'];
-        $external_transaction_id = isset($callback_data['ExternalTransactionId']) ? sanitize_text_field($callback_data['ExternalTransactionId']) : '';
-        $transaction_index = isset($callback_data['TransactionIndex']) ? sanitize_text_field($callback_data['TransactionIndex']) : '';
-        $transaction_status = isset($callback_data['TransactionStatus']) ? sanitize_text_field($callback_data['TransactionStatus']) : '';
+        // Debug: Log the received values.
+        error_log( 'Callback ExternalTransactionId: ' . $external_transaction_id );
+        error_log( 'Callback TransactionIndex: ' . $transaction_index );
 
-        // Optionally: Verify the callback signature here using $data['signature'].
-
-        // Find the order using the stored transaction index.
-        $orders = get_posts(array(
-            'post_type' => 'shop_order',
-            'meta_key' => '_barterpay_txn_index',
-            'meta_value' => $transaction_index,
+        $args = array(
+            'post_type'      => array( 'shop_order_placehold' ),
             'posts_per_page' => 1,
-            'post_status' => array('wc-on-hold', 'wc-pending', 'wc-failed', 'wc-processing'),
-        ));
+            'post_status' => array('draft', 'published'),
+            'meta_query'     => array(
+                array(
+                    'key'     => '_barterpay_txn_id',
+                    'value'   => $external_transaction_id,
+                    'compare' => '='
+                )
+            )
+        );
+        $query = new WP_Query( $args );
+        print_r( 'SQL Query: ' . $query->request );
 
-        if (!empty($orders)) {
-            $order_id = $orders[0]->ID;
-            $order = wc_get_order($order_id);
 
-            if ('success' === $transaction_status) {
+        if ( $query->have_posts() ) {
+            $order_id = $query->posts[0]->ID;
+            $order    = wc_get_order( $order_id );
+
+            if ( 'success' === $transaction_status ) {
                 // Mark the order as paid.
-                $order->payment_complete();
-                $order->add_order_note(__('Payment completed via BarterPay callback.', 'barterpay'));
+                $order->payment_complete( $external_transaction_id );
+                $order->add_order_note( sprintf( __('Payment of %s confirmed via BarterPay callback.', 'barterpay'), wc_price( $transaction_amount ) ) );
             } else {
                 // Mark the order as failed.
-                $order->update_status('failed', __('Payment failed via BarterPay callback.', 'barterpay'));
+                $order->update_status( 'failed', __('Payment failed via BarterPay callback.', 'barterpay') );
             }
             echo 'OK';
             exit;
         } else {
+            error_log( 'Order not found for TransactionIndex: ' . $transaction_index . ' or ExternalTransactionId: ' . $external_transaction_id );
             echo 'Order not found';
             exit;
         }
     }
 }
+
+
 // Check if WooCommerce Blocks is loaded and add support for BarterPay.
 add_action('woocommerce_blocks_loaded', 'barterpay_load_blocks_support');
 
