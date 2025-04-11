@@ -488,18 +488,20 @@ function barterpay_callback_handler() {
             $transaction_status      = isset( $_GET['transactionStatus'] ) ? sanitize_text_field( $_GET['transactionStatus'] ) : '';
             $transaction_amount      = isset( $_GET['transactionAmount'] ) ? floatval( $_GET['transactionAmount'] ) : 0;
         } else {
+            barterpay_log_callback( 'Invalid callback data received' );
             echo 'Invalid callback data';
             exit;
         }
 
-        // Debug: Log the received values.
-        error_log( 'Callback ExternalTransactionId: ' . $external_transaction_id );
-        error_log( 'Callback TransactionIndex: ' . $transaction_index );
+        // Log the received callback data.
+
+        barterpay_log_callback( '---------------------- TRANSACTION: '. $external_transaction_id .' ----------------------');
+        barterpay_log_callback( 'Callback received - ExternalTransactionId: ' . $external_transaction_id . ', TransactionIndex: ' . $transaction_index );
 
         $args = array(
             'post_type'      => array( 'shop_order_placehold' ),
             'posts_per_page' => 1,
-            'post_status' => array('draft', 'published'),
+            'post_status'    => array( 'draft', 'published' ),
             'meta_query'     => array(
                 array(
                     'key'     => '_barterpay_txn_id',
@@ -508,30 +510,112 @@ function barterpay_callback_handler() {
                 )
             )
         );
-        $query = new WP_Query( $args );
-        print_r( 'SQL Query: ' . $query->request );
 
+        $attempts    = 0;
+        $max_attempts = 3;
+        $order_found = false;
 
-        if ( $query->have_posts() ) {
+        while ( $attempts < $max_attempts && ! $order_found ) {
+            $query = new WP_Query( $args );
+
+            if ( $query->have_posts() ) {
+                $order_found = true;
+                break;
+            } else {
+                barterpay_log_callback( "Attempt " . ( $attempts + 1 ) . ": Order not found for ExternalTransactionId " . $external_transaction_id );
+                sleep( 1 );
+                $attempts++;
+            }
+        }
+
+        // Log the final SQL query for debugging purposes.
+        barterpay_log_callback( 'SQL Query: ' . $query->request );
+
+        if ( $order_found ) {
             $order_id = $query->posts[0]->ID;
             $order    = wc_get_order( $order_id );
 
-            if ( 'success' === $transaction_status ) {
+            if ( 'success' === strtolower( $transaction_status ) ) {
                 // Mark the order as paid.
                 $order->payment_complete( $external_transaction_id );
-                $order->add_order_note( sprintf( __('Payment of %s confirmed via BarterPay callback.', 'barterpay'), wc_price( $transaction_amount ) ) );
+                $order->add_order_note( sprintf( __( 'Payment of %s confirmed via BarterPay callback.', 'barterpay' ), wc_price( $transaction_amount ) ) );
+                barterpay_log_callback( "Order $order_id found and marked as paid." );
             } else {
                 // Mark the order as failed.
-                $order->update_status( 'failed', __('Payment failed via BarterPay callback.', 'barterpay') );
+                $order->update_status( 'failed', __( 'Payment failed via BarterPay callback.', 'barterpay' ) );
+                barterpay_log_callback( "Order $order_id found but marked as failed." );
             }
             echo 'OK';
             exit;
         } else {
-            error_log( 'Order not found for TransactionIndex: ' . $transaction_index . ' or ExternalTransactionId: ' . $external_transaction_id );
+            barterpay_log_callback( 'Final attempt: Order not found for TransactionIndex: ' . $transaction_index . ' or ExternalTransactionId: ' . $external_transaction_id );
             echo 'Order not found';
             exit;
         }
+        barterpay_log_callback('CALLBACK: '. $data);
     }
+}
+/**
+ * Register the logs page under Settings.
+ */
+add_action('admin_menu', 'barterpay_add_settings_menu');
+function barterpay_add_settings_menu() {
+    add_options_page(
+        'BarterPay Logs',          // Page title.
+        'BarterPay Logs',          // Menu title.
+        'manage_options',          // Capability required.
+        'barterpay_logs',          // Menu slug.
+        'barterpay_logs_page'      // Callback function.
+    );
+}
+
+/**
+ * Render the callback logs page.
+ */
+function barterpay_logs_page() {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( __( 'You do not have sufficient permissions to access this page.' ) );
+    }
+
+    // Path to the log file.
+    $log_file = plugin_dir_path( __FILE__ ) . 'barterpay-callback.log';
+    
+    echo '<div class="wrap">';
+    echo '<h1>BarterPay Callback Logs</h1>';
+
+    // Option to clear logs.
+    if ( isset( $_GET['action'] ) && 'clear' === $_GET['action'] && check_admin_referer( 'barterpay_clear_logs' ) ) {
+        file_put_contents( $log_file, '' );
+        echo '<div class="updated notice"><p>Logs cleared.</p></div>';
+    }
+
+    if ( file_exists( $log_file ) ) {
+        $logs = file_get_contents( $log_file );
+        // Form for clearing logs.
+        echo '<form method="get" style="margin-bottom:1em;">';
+        echo '<input type="hidden" name="page" value="barterpay_logs" />';
+        wp_nonce_field( 'barterpay_clear_logs' );
+        echo '<input type="submit" name="action" value="clear" class="button button-secondary" onclick="return confirm(\'Are you sure you want to clear the logs?\');" />';
+        echo '</form>';
+        // Display the logs in a scrollable block.
+        echo '<div style="overflow:auto; max-height:500px; background:#f4f4f4; padding:10px; border:1px solid #ddd;"><pre>' . esc_html( $logs ) . '</pre></div>';
+    } else {
+        echo '<p>No logs found.</p>';
+    }
+    
+    echo '</div>';
+}
+
+/**
+ * Callback logging helper function.
+ *
+ * @param string $message The message to log.
+ */
+function barterpay_log_callback( $message ) {
+    // Adjust the log file path as needed.
+    $log_file = plugin_dir_path( __FILE__ ) . 'barterpay-callback.log';
+    $timestamp = date( 'Y-m-d H:i:s' );
+    file_put_contents( $log_file, "[$timestamp] $message" . PHP_EOL, FILE_APPEND );
 }
 
 
