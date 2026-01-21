@@ -1479,3 +1479,62 @@ function barterpay_manual_expire_check() {
         } );
     }
 }
+
+/**
+ * Register transaction details meta box on order edit page.
+ */
+add_action( 'add_meta_boxes', 'barterpay_add_order_meta_box' );
+function barterpay_add_order_meta_box() {
+    add_meta_box(
+        'barterpay_transaction_details',
+        __( 'Transaction Details', 'barterpay' ),
+        'barterpay_order_meta_box_content',
+        'shop_order',
+        'side',
+        'default'
+    );
+    
+    // For HPOS (High-Performance Order Storage)
+    add_meta_box(
+        'barterpay_transaction_details',
+        __( 'BarterPay Transaction Details', 'barterpay' ),
+        'barterpay_order_meta_box_content',
+        'woocommerce_page_wc-orders',
+        'side',
+        'default'
+    );
+}
+
+/**
+ * Display BarterPay transaction details in meta box.
+ */
+function barterpay_order_meta_box_content( $post_or_order ) {
+    // Support both post objects and order objects (for HPOS)
+    $order = ( $post_or_order instanceof WP_Post ) ? wc_get_order( $post_or_order->ID ) : $post_or_order;
+    
+    if ( ! $order || $order->get_payment_method() !== 'barterpay' ) {
+        echo '<p>' . __( 'Not a BarterPay order.', 'barterpay' ) . '</p>';
+        return;
+    }
+    
+    $order_key = $order->get_order_key();
+    $transaction_index = $order->get_meta( '_barterpay_api_txn_index', true );
+    $external_txn_id = $order->get_meta( '_barterpay_external_txn_id', true );
+    
+    echo '<div style="font-size: 12px;">';
+    
+    echo '<p><strong>' . __( 'Order Key:', 'barterpay' ) . '</strong><br>';
+    echo '<code style="font-size: 11px; word-break: break-all;">' . esc_html( $order_key ) . '</code></p>';
+    
+    if ( $transaction_index ) {
+        echo '<p><strong>' . __( 'Transaction Index:', 'barterpay' ) . '</strong><br>';
+        echo '<code style="font-size: 11px; word-break: break-all;">' . esc_html( $transaction_index ) . '</code></p>';
+    }
+    
+    if ( $external_txn_id ) {
+        echo '<p><strong>' . __( 'External Transaction ID:', 'barterpay' ) . '</strong><br>';
+        echo '<code style="font-size: 11px; word-break: break-all;">' . esc_html( $external_txn_id ) . '</code></p>';
+    }
+    
+    echo '</div>';
+}
