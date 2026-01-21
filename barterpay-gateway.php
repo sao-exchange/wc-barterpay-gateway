@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BarterPay WooCommerce Gateway
  * Description: Start accepting BarterPay payments easy way.
- * Version: 1.4.0
+ * Version: 1.4.1
  * Author: BarterPay <info@getbarterpay.com>
  * Requires Plugins: woocommerce
  */
