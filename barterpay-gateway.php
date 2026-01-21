@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BarterPay WooCommerce Gateway
  * Description: Start accepting BarterPay payments easy way.
- * Version: 1.3.9
+ * Version: 1.4.0
  * Author: BarterPay <info@getbarterpay.com>
  * Requires Plugins: woocommerce
  */
@@ -96,9 +96,8 @@ function init_barterpay_gateway() {
 
             $this->id                 = 'barterpay';
             $this->icon               = apply_filters( 'woocommerce_cod_icon', '' );
-            $this->method_title       = __( 'BarterPay Gateway', 'barterpay' );
-            $this->method_description = __( 'Security verification required: Phone, & Email.
-Your transaction today was with Barterpay and your statement will say the same. We accept your BPSK Keys as barter for your order.', 'barterpay' );
+            $this->method_title       = __( 'BarterPay', 'barterpay' );
+            $this->method_description = __( 'Accept payments via BarterPay.', 'barterpay' );
             $this->has_fields         = false;
         }
 
@@ -117,14 +116,14 @@ Your transaction today was with Barterpay and your statement will say the same. 
                     'title'       => __( 'Title', 'barterpay' ),
                     'type'        => 'text',
                     'description' => __( 'Title shown to the user during checkout.', 'barterpay' ),
-                    'default'     => __( 'BarterPay Gateway', 'barterpay' ),
+                    'default'     => __( 'Credit/Debit Via BarterPay', 'barterpay' ),
                     'desc_tip'    => true,
                 ),
                 'description' => array(
                     'title'       => __( 'Description', 'barterpay' ),
                     'type'        => 'textarea',
                     'description' => __( 'Description shown to the user during checkout.', 'barterpay' ),
-                    'default'     => __( 'Pay via BarterPay. You will be redirected to complete your payment.', 'barterpay' ),
+                    'default'     => __( 'Security verification required: Phone, & Email. Your transaction today will be with BarterPay and your statement will say the same. We accept your BPSK Keys as barter for your order.', 'barterpay' ),
                 ),
                 'api_key' => array(
                     'title'       => __( 'API Key', 'barterpay' ),
@@ -179,6 +178,25 @@ Your transaction today was with Barterpay and your statement will say the same. 
                     'label' => __( 'Accept BarterPay, if the order is virtual', 'barterpay' ),
                     'type'  => 'checkbox',
                     'default' => 'yes',
+                ),
+                'verification_method' => array(
+                    'title'       => __( 'Payment Verification Method', 'barterpay' ),
+                    'type'        => 'select',
+                    'description' => __( 'Choose how payment status is verified. Callback: BarterPay sends status to your server. Polling: Your server checks status when customer returns.', 'barterpay' ),
+                    'default'     => 'callback',
+                    'options'     => array(
+                        'callback' => __( 'Callback (Server-to-Server)', 'barterpay' ),
+                        'polling'  => __( 'Polling (Status Check on Return)', 'barterpay' ),
+                    ),
+                    'desc_tip'    => true,
+                ),
+                'enable_order_expiration' => array(
+                    'title'       => __( 'Enable Order Expiration', 'barterpay' ),
+                    'type'        => 'checkbox',
+                    'label'       => __( 'Automatically cancel and trash abandoned orders after 30 minutes', 'barterpay' ),
+                    'description' => __( 'Orders that remain on-hold for more than 30 minutes will be automatically cancelled and moved to trash.', 'barterpay' ),
+                    'default'     => 'yes',
+                    'desc_tip'    => true,
                 ),
                 'enable_custom_redirect' => array(
                     'title'   => __( 'Enable Custom Redirect', 'barterpay' ),
@@ -474,7 +492,21 @@ Your transaction today was with Barterpay and your statement will say the same. 
                 </div>
                 <script type="text/javascript">
                     jQuery(document).ready(function ($) {
+                        console.log('BarterPay: Starting payment status polling...');
+                        var pollCount = 0;
+                        var maxPolls = 60; // Stop after 60 polls (5 minutes at 5 second intervals)
+                        
                         var checkStatusInterval = setInterval(function () {
+                            pollCount++;
+                            console.log('BarterPay: Poll attempt ' + pollCount + '/' + maxPolls);
+                            
+                            if (pollCount >= maxPolls) {
+                                console.log('BarterPay: Max polls reached, stopping...');
+                                clearInterval(checkStatusInterval);
+                                $('.barterpay-processing-overlay').fadeOut();
+                                return;
+                            }
+                            
                             $.ajax({
                                 url: '<?php echo admin_url( 'admin-ajax.php' ); ?>',
                                 method: 'POST',
@@ -483,16 +515,18 @@ Your transaction today was with Barterpay and your statement will say the same. 
                                     order_id: '<?php echo $order_id; ?>'
                                 },
                                 success: function (response) {
+                                    console.log('BarterPay: AJAX response', response);
                                     if (response.success && response.data.status === 'paid') {
+                                        console.log('BarterPay: Payment confirmed! Redirecting...');
                                         clearInterval(checkStatusInterval);
                                         window.location.href = '<?php echo esc_js( $redirect_url ); ?>';
                                     }
                                 },
-                                error: function () {
-                                    // Optionally handle any errors.
+                                error: function (xhr, status, error) {
+                                    console.error('BarterPay: AJAX error', status, error);
                                 }
                             });
-                        }, 1000); // Poll every 1 second.
+                        }, 5000); // Poll every 5 seconds
                     });
                 </script>
                 <?php
@@ -552,7 +586,21 @@ Your transaction today was with Barterpay and your statement will say the same. 
                 </div>
                 <script type="text/javascript">
                     jQuery(document).ready(function ($) {
+                        console.log('BarterPay: Starting payment status polling...');
+                        var pollCount = 0;
+                        var maxPolls = 60; // Stop after 60 polls (5 minutes at 5 second intervals)
+                        
                         var checkStatusInterval = setInterval(function () {
+                            pollCount++;
+                            console.log('BarterPay: Poll attempt ' + pollCount + '/' + maxPolls);
+                            
+                            if (pollCount >= maxPolls) {
+                                console.log('BarterPay: Max polls reached, stopping...');
+                                clearInterval(checkStatusInterval);
+                                $('.barterpay-processing-overlay').fadeOut();
+                                return;
+                            }
+                            
                             $.ajax({
                                 url: '<?php echo admin_url( 'admin-ajax.php' ); ?>',
                                 method: 'POST',
@@ -561,17 +609,19 @@ Your transaction today was with Barterpay and your statement will say the same. 
                                     order_id: '<?php echo $order_id; ?>'
                                 },
                                 success: function (response) {
+                                    console.log('BarterPay: AJAX response', response);
                                     if (response.success && response.data.status === 'paid') {
+                                        console.log('BarterPay: Payment confirmed! Reloading page...');
                                         clearInterval(checkStatusInterval);
                                         // Reload the page so that the updated order status is reflected.
                                         location.reload();
                                     }
                                 },
-                                error: function () {
-                                    // Optionally handle any errors.
+                                error: function (xhr, status, error) {
+                                    console.error('BarterPay: AJAX error', status, error);
                                 }
                             });
-                        }, 1000); // Poll every 1 second.
+                        }, 5000); // Poll every 5 seconds
                     });
                 </script>
                 <?php
@@ -692,8 +742,119 @@ function barterpay_handle_return_redirect() {
             $order->get_status()
         ) );
         
-        // Get the gateway instance to check custom redirect settings
+        // Get the gateway instance
         $gateway = new WC_Gateway_BarterPay();
+        $verification_method = $gateway->get_option( 'verification_method', 'callback' );
+        
+        barterpay_log_callback( sprintf( 'BarterPay return: Verification method: %s', $verification_method ) );
+        
+        // If polling method is enabled, check transaction status via API
+        if ( 'polling' === $verification_method ) {
+            barterpay_log_callback( '========== POLLING METHOD ENABLED - CHECKING API ==========' );
+            
+            // Get the transaction index from order meta or from URL parameter
+            $transaction_index = $order->get_meta( '_barterpay_api_txn_index', true );
+            barterpay_log_callback( sprintf( 'Transaction index from order meta: %s', $transaction_index ? $transaction_index : 'EMPTY' ) );
+            
+            if ( empty( $transaction_index ) && ! empty( $transaction_id ) ) {
+                $transaction_index = $transaction_id;
+                barterpay_log_callback( sprintf( 'Using transaction_id from URL: %s', $transaction_index ) );
+            }
+            
+            if ( empty( $transaction_index ) ) {
+                barterpay_log_callback( '!!! ERROR: No transaction index available for polling !!!' );
+            } else {
+                // Call the status check endpoint
+                $api_key = $gateway->get_option( 'api_key' );
+                $sandbox = $gateway->get_option( 'sandbox' );
+                
+                barterpay_log_callback( sprintf( 'API Key configured: %s', $api_key ? 'YES (' . substr($api_key, 0, 10) . '...)' : 'NO' ) );
+                barterpay_log_callback( sprintf( 'Sandbox mode: %s', $sandbox ) );
+                
+                if ( 'yes' === $sandbox ) {
+                    $endpoint = 'https://test-api.getbarterpay.com/api/pay/m-api/check-transaction-status';
+                } else {
+                    $endpoint = 'https://api.getbarterpay.com/api/pay/m-api/check-transaction-status';
+                }
+                
+                $url = add_query_arg( 'TransactionIndex', $transaction_index, $endpoint );
+                
+                barterpay_log_callback( sprintf( '>>> Calling BarterPay API: %s', $url ) );
+                barterpay_log_callback( sprintf( '>>> Request headers: X-SAO-Token: %s', substr($api_key, 0, 10) . '...' ) );
+                
+                $response = wp_remote_get( $url, array(
+                    'timeout' => 15,
+                    'headers' => array(
+                        'X-SAO-Token' => $api_key,
+                    ),
+                ) );
+                
+                if ( is_wp_error( $response ) ) {
+                    barterpay_log_callback( sprintf( '!!! API ERROR: %s', $response->get_error_message() ) );
+                } else {
+                    $status_code = wp_remote_retrieve_response_code( $response );
+                    $body = wp_remote_retrieve_body( $response );
+                    
+                    barterpay_log_callback( sprintf( '<<< API Response Status Code: %d', $status_code ) );
+                    barterpay_log_callback( sprintf( '<<< API Response Body: %s', $body ) );
+                    
+                    $result = json_decode( $body, true );
+                    
+                    if ( json_last_error() !== JSON_ERROR_NONE ) {
+                        barterpay_log_callback( sprintf( '!!! JSON Parse Error: %s', json_last_error_msg() ) );
+                    } else {
+                        barterpay_log_callback( '<<< Parsed JSON: ' . print_r( $result, true ) );
+                    }
+                    
+                    if ( isset( $result['transactionStatus'] ) ) {
+                        $api_status = strtolower( $result['transactionStatus'] );
+                        $api_amount = isset( $result['transactionAmount'] ) ? floatval( $result['transactionAmount'] ) : 0;
+                        
+                        barterpay_log_callback( sprintf( 
+                            '=== TRANSACTION STATUS: %s | AMOUNT: %s ===', 
+                            strtoupper($api_status),
+                            $api_amount
+                        ) );
+                        
+                        // Process the transaction based on status
+                        if ( 'completed' === $api_status || 'success' === $api_status ) {
+                            if ( ! $order->is_paid() ) {
+                                barterpay_log_callback( sprintf( 'SUCCESS! Marking order %d as paid...', $order_id ) );
+                                $order->payment_complete( $transaction_index );
+                                $order->add_order_note(
+                                    sprintf(
+                                        __( 'Payment confirmed via BarterPay polling. Amount: %s, Transaction Index: %s', 'barterpay' ),
+                                        wc_price( $api_amount, array( 'currency' => $order->get_currency() ) ),
+                                        esc_html( $transaction_index )
+                                    )
+                                );
+                                barterpay_log_callback( sprintf( '✓ Order %d marked as PAID', $order_id ) );
+                            } else {
+                                barterpay_log_callback( sprintf( 'Order %d already paid - skipping', $order_id ) );
+                            }
+                        } elseif ( in_array( $api_status, array( 'failed', 'cancelled', 'expired' ), true ) ) {
+                            if ( ! $order->has_status( 'failed' ) ) {
+                                barterpay_log_callback( sprintf( 'FAILED! Marking order %d as failed (status: %s)...', $order_id, $api_status ) );
+                                $order->update_status( 'failed', sprintf( 
+                                    __( 'Payment %s via BarterPay polling. Transaction Index: %s', 'barterpay' ),
+                                    $api_status,
+                                    esc_html( $transaction_index )
+                                ) );
+                                barterpay_log_callback( sprintf( '✗ Order %d marked as %s', $order_id, strtoupper($api_status) ) );
+                            }
+                        } else {
+                            barterpay_log_callback( sprintf( '!!! UNKNOWN STATUS: %s for order %d', $api_status, $order_id ) );
+                        }
+                    } else {
+                        barterpay_log_callback( '!!! ERROR: No "transactionStatus" field in API response' );
+                        barterpay_log_callback( 'Available fields: ' . implode( ', ', array_keys( $result ? $result : array() ) ) );
+                    }
+                }
+            }
+            barterpay_log_callback( '========== END POLLING CHECK ==========' );
+        } else {
+            barterpay_log_callback( 'Callback method enabled - skipping API check (waiting for callback)' );
+        }
         
         // Check if custom redirect is enabled
         if ( 'yes' === $gateway->get_option( 'enable_custom_redirect' ) && ! empty( $gateway->get_option( 'custom_redirect_url' ) ) ) {
@@ -988,16 +1149,130 @@ function barterpay_check_status_callback() {
     }
 
     $order_id = absint( $_POST['order_id'] );
+    
+    // Clear any cached order data to ensure we get the latest status
+    wp_cache_delete( 'order-' . $order_id, 'orders' );
+    wp_cache_delete( $order_id, 'post_meta' );
+    
     $order = wc_get_order( $order_id );
 
     if ( ! $order ) {
         wp_send_json_error( array( 'message' => 'Invalid order id' ) );
     }
 
-    if ( $order->is_paid() ) {
-        wp_send_json_success( array( 'status' => 'paid' ) );
+    // Get gateway settings
+    $gateway = new WC_Gateway_BarterPay();
+    $verification_method = $gateway->get_option( 'verification_method', 'callback' );
+    
+    barterpay_log_callback( sprintf( 
+        '========== AJAX POLLING CHECK for order %d (method: %s) ==========', 
+        $order_id,
+        $verification_method
+    ) );
+    
+    // If polling method, check BarterPay API directly
+    if ( 'polling' === $verification_method ) {
+        $transaction_index = $order->get_meta( '_barterpay_api_txn_index', true );
+        
+        barterpay_log_callback( sprintf( 'AJAX polling: Transaction Index: %s', $transaction_index ? $transaction_index : 'EMPTY' ) );
+        
+        if ( ! empty( $transaction_index ) ) {
+            $api_key = $gateway->get_option( 'api_key' );
+            $sandbox = $gateway->get_option( 'sandbox' );
+            
+            if ( 'yes' === $sandbox ) {
+                $endpoint = 'https://test-api.getbarterpay.com/api/pay/m-api/check-transaction-status';
+            } else {
+                $endpoint = 'https://api.getbarterpay.com/api/pay/m-api/check-transaction-status';
+            }
+            
+            $url = add_query_arg( 'TransactionIndex', $transaction_index, $endpoint );
+            
+            barterpay_log_callback( sprintf( 'AJAX polling: Checking API URL: %s', $url ) );
+            
+            $response = wp_remote_get( $url, array(
+                'timeout' => 15,
+                'headers' => array(
+                    'X-SAO-Token' => $api_key,
+                ),
+            ) );
+            
+            if ( is_wp_error( $response ) ) {
+                barterpay_log_callback( sprintf( 'AJAX polling: API error: %s', $response->get_error_message() ) );
+            } else {
+                $body = wp_remote_retrieve_body( $response );
+                $result = json_decode( $body, true );
+                
+                barterpay_log_callback( sprintf( 'AJAX polling: API response: %s', $body ) );
+                
+                if ( isset( $result['transactionStatus'] ) ) {
+                    $api_status = strtolower( $result['transactionStatus'] );
+                    $api_amount = isset( $result['transactionAmount'] ) ? floatval( $result['transactionAmount'] ) : 0;
+                    
+                    barterpay_log_callback( sprintf( 
+                        'AJAX polling: API Status: %s, Amount: %s', 
+                        $api_status,
+                        $api_amount
+                    ) );
+                    
+                    // Update order if API shows success but order not paid
+                    if ( ( 'completed' === $api_status || 'success' === $api_status ) && ! $order->is_paid() ) {
+                        barterpay_log_callback( sprintf( 'AJAX polling: Marking order %d as paid from API success', $order_id ) );
+                        $order->payment_complete( $transaction_index );
+                        $order->add_order_note(
+                            sprintf(
+                                __( 'Payment confirmed via BarterPay AJAX polling. Amount: %s, Transaction Index: %s', 'barterpay' ),
+                                wc_price( $api_amount, array( 'currency' => $order->get_currency() ) ),
+                                esc_html( $transaction_index )
+                            )
+                        );
+                        
+                        // Return success immediately
+                        wp_send_json_success( array( 
+                            'status' => 'paid',
+                            'order_status' => 'processing',
+                            'api_status' => $api_status
+                        ) );
+                    } elseif ( in_array( $api_status, array( 'failed', 'cancelled', 'expired' ), true ) ) {
+                        if ( ! $order->has_status( 'failed' ) ) {
+                            $order->update_status( 'failed', sprintf( 
+                                __( 'Payment %s via BarterPay AJAX polling. Transaction Index: %s', 'barterpay' ),
+                                $api_status,
+                                esc_html( $transaction_index )
+                            ) );
+                        }
+                        
+                        wp_send_json_success( array( 
+                            'status' => 'failed',
+                            'order_status' => 'failed',
+                            'api_status' => $api_status
+                        ) );
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback: Check order status
+    $is_paid = $order->is_paid();
+    $status = $order->get_status();
+    
+    barterpay_log_callback( sprintf( 
+        'AJAX polling: Final check - is_paid=%s, status=%s', 
+        $is_paid ? 'true' : 'false', 
+        $status 
+    ) );
+
+    if ( $is_paid || in_array( $status, array( 'completed', 'processing' ), true ) ) {
+        wp_send_json_success( array( 
+            'status' => 'paid',
+            'order_status' => $status
+        ) );
     } else {
-        wp_send_json_success( array( 'status' => 'pending' ) );
+        wp_send_json_success( array( 
+            'status' => 'pending',
+            'order_status' => $status
+        ) );
     }
 }
 
@@ -1011,18 +1286,196 @@ function add_barterpay_gateway( $gateways ) {
 }
 
 /**
- * Activation hook to flush rewrite rules.
+ * Ensure cron is scheduled on plugin load (automatic scheduling).
+ */
+add_action( 'plugins_loaded', 'barterpay_ensure_cron_scheduled' );
+function barterpay_ensure_cron_scheduled() {
+    if ( ! wp_next_scheduled( 'barterpay_check_abandoned_orders' ) ) {
+        wp_schedule_event( time(), 'hourly', 'barterpay_check_abandoned_orders' );
+    }
+}
+
+/**
+ * Activation hook to flush rewrite rules and schedule cron.
  */
 register_activation_hook( __FILE__, 'barterpay_activate' );
 function barterpay_activate() {
     barterpay_add_rewrite_rules();
     flush_rewrite_rules();
+    
+    // Schedule cron job for order expiration check
+    if ( ! wp_next_scheduled( 'barterpay_check_abandoned_orders' ) ) {
+        wp_schedule_event( time(), 'hourly', 'barterpay_check_abandoned_orders' );
+    }
 }
 
 /**
- * Deactivation hook to flush rewrite rules.
+ * Deactivation hook to flush rewrite rules and clear cron.
  */
 register_deactivation_hook( __FILE__, 'barterpay_deactivate' );
 function barterpay_deactivate() {
     flush_rewrite_rules();
+    
+    // Clear scheduled cron job
+    $timestamp = wp_next_scheduled( 'barterpay_check_abandoned_orders' );
+    if ( $timestamp ) {
+        wp_unschedule_event( $timestamp, 'barterpay_check_abandoned_orders' );
+    }
+}
+
+/**
+ * Check and expire abandoned BarterPay orders.
+ * Orders that are on-hold for more than 2 minutes will be set to failed status.
+ */
+add_action( 'barterpay_check_abandoned_orders', 'barterpay_expire_abandoned_orders' );
+function barterpay_expire_abandoned_orders() {
+    // Store the last run time
+    update_option( 'barterpay_cron_last_run', time() );
+    
+    // Check if order expiration feature is enabled
+    $gateway = new WC_Gateway_BarterPay();
+    $enabled = $gateway->get_option( 'enable_order_expiration', 'yes' );
+    
+    if ( 'yes' !== $enabled ) {
+        barterpay_log_callback( 'Order expiration is disabled - skipping check.' );
+        return;
+    }
+    
+    barterpay_log_callback( 'Checking for abandoned BarterPay orders...' );
+    
+    // Get orders that are on-hold with BarterPay gateway
+    $orders = wc_get_orders( array(
+        'limit'          => -1,
+        'status'         => 'on-hold',
+        'payment_method' => 'barterpay',
+        'date_created'   => '<' . ( time() - 1800 ), // 30 minutes ago (1800 seconds)
+    ) );
+    
+    if ( empty( $orders ) ) {
+        barterpay_log_callback( 'No abandoned orders found.' );
+        return;
+    }
+    
+    barterpay_log_callback( sprintf( 'Found %d abandoned orders to process', count( $orders ) ) );
+    
+    foreach ( $orders as $order ) {
+        $order_id = $order->get_id();
+        $order_date = $order->get_date_created();
+        $time_diff = time() - $order_date->getTimestamp();
+        
+        barterpay_log_callback( sprintf(
+            'Processing abandoned order %d (created %d minutes ago)',
+            $order_id,
+            floor( $time_diff / 60 )
+        ) );
+        
+        // Set order to cancelled and move to trash
+        $order->update_status( 'cancelled', __( 'Order expired: Payment was not completed within 30 minutes.', 'barterpay' ) );
+        
+        // Move order to trash
+        wp_trash_post( $order_id );
+        
+        barterpay_log_callback( sprintf( 'Order %d marked as cancelled and moved to trash due to expiration', $order_id ) );
+    }
+    
+    barterpay_log_callback( sprintf( 'Finished processing %d abandoned orders', count( $orders ) ) );
+}
+
+/**
+ * Display admin notice showing cron job status.
+ * This helps diagnose if the cron job is properly scheduled.
+ */
+add_action( 'admin_notices', 'barterpay_cron_status_notice' );
+function barterpay_cron_status_notice() {
+    // Only show to administrators on the gateway settings page
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+    
+    // Only show on BarterPay settings page
+    if ( ! isset( $_GET['page'] ) || $_GET['page'] !== 'wc-settings' ||
+         ! isset( $_GET['tab'] ) || $_GET['tab'] !== 'checkout' ||
+         ! isset( $_GET['section'] ) || $_GET['section'] !== 'barterpay' ) {
+        return;
+    }
+    
+    $next_run = wp_next_scheduled( 'barterpay_check_abandoned_orders' );
+    $last_run = get_option( 'barterpay_cron_last_run' );
+    
+    if ( $next_run ) {
+        echo '<div class="notice notice-info"><p>';
+        echo '<strong>BarterPay Order Expiration Cron:</strong> Active. ';
+        
+        if ( $last_run ) {
+            echo 'Last run: <code>' . date( 'Y-m-d H:i:s', $last_run ) . '</code> | ';
+        } else {
+            echo 'Last run: <code>Never</code> | ';
+        }
+        
+        echo 'Next run: <code>' . date( 'Y-m-d H:i:s', $next_run ) . '</code>';
+        echo ' | <a href="' . admin_url( 'admin.php?page=wc-settings&tab=checkout&section=barterpay&barterpay_expire_now=1' ) . '" onclick="return confirm(\'Run order expiration check now?\')" class="button button-small">Run Now</a>';
+        echo ' | <a href="' . admin_url( 'admin.php?page=wc-settings&tab=checkout&section=barterpay&barterpay_reschedule_cron=1' ) . '" onclick="return confirm(\'Reschedule cron to run in 1 minute?\')" class="button button-small">Test (Run in 1 min)</a>';
+        echo '</p></div>';
+    } else {
+        echo '<div class="notice notice-error"><p>';
+        echo '<strong>BarterPay Order Expiration Cron:</strong> NOT SCHEDULED! ';
+        echo '<a href="' . admin_url( 'admin.php?page=wc-settings&tab=checkout&section=barterpay&barterpay_schedule_cron=1' ) . '" class="button button-primary button-small">Schedule Now</a> ';
+        echo 'or deactivate and reactivate the plugin.';
+        echo '</p></div>';
+    }
+}
+
+/**
+ * Manual trigger for order expiration check.
+ * Allows administrators to manually run the expiration check.
+ */
+add_action( 'admin_init', 'barterpay_manual_expire_check' );
+function barterpay_manual_expire_check() {
+    // Reschedule cron to run in 1 minute (for testing)
+    if ( isset( $_GET['barterpay_reschedule_cron'] ) && current_user_can( 'manage_options' ) ) {
+        $timestamp = wp_next_scheduled( 'barterpay_check_abandoned_orders' );
+        if ( $timestamp ) {
+            wp_unschedule_event( $timestamp, 'barterpay_check_abandoned_orders' );
+        }
+        wp_schedule_event( time() + 60, 'hourly', 'barterpay_check_abandoned_orders' );
+        barterpay_log_callback( 'Cron rescheduled to run in 1 minute by admin (testing).' );
+        wp_redirect( admin_url( 'admin.php?page=wc-settings&tab=checkout&section=barterpay' ) );
+        exit;
+    }
+    
+    // Schedule cron if requested
+    if ( isset( $_GET['barterpay_schedule_cron'] ) && current_user_can( 'manage_options' ) ) {
+        if ( ! wp_next_scheduled( 'barterpay_check_abandoned_orders' ) ) {
+            wp_schedule_event( time(), 'hourly', 'barterpay_check_abandoned_orders' );
+            barterpay_log_callback( 'Cron job scheduled manually by admin.' );
+        }
+        wp_redirect( admin_url( 'admin.php?page=wc-settings&tab=checkout&section=barterpay' ) );
+        exit;
+    }
+    
+    if ( isset( $_GET['barterpay_expire_now'] ) && current_user_can( 'manage_options' ) ) {
+        barterpay_log_callback( 'Manual order expiration check triggered by admin.' );
+        barterpay_expire_abandoned_orders();
+        
+        // Redirect back to settings page with success message
+        wp_redirect( add_query_arg(
+            array(
+                'page' => 'wc-settings',
+                'tab' => 'checkout',
+                'section' => 'barterpay',
+                'barterpay_expired' => '1'
+            ),
+            admin_url( 'admin.php' )
+        ) );
+        exit;
+    }
+    
+    // Show success message after manual expiration
+    if ( isset( $_GET['barterpay_expired'] ) && current_user_can( 'manage_options' ) ) {
+        add_action( 'admin_notices', function() {
+            echo '<div class="notice notice-success is-dismissible"><p>';
+            echo '<strong>BarterPay:</strong> Order expiration check completed. Check logs for details.';
+            echo '</p></div>';
+        } );
+    }
 }
