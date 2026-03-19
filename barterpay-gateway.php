@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BarterPay WooCommerce Gateway
  * Description: Start accepting BarterPay payments easy way.
- * Version: 1.4.1
+ * Version: 1.4.5
  * Author: BarterPay <info@getbarterpay.com>
  * Requires Plugins: woocommerce
  */
@@ -61,6 +61,25 @@ function init_barterpay_gateway() {
          */
         public $sandbox;
 
+        /**
+         * Whether to enable a custom redirect URL after payment.
+         * @var string
+         */
+        public $enable_custom_redirect;
+
+        /**
+         * Custom redirect URL after successful payment.
+         * @var string
+         */
+        public $custom_redirect_url;
+
+        /**
+         * Payment flow: 'hosted' (redirect) or 'widget' (embedded iframe).
+         * Defaults to 'hosted' so existing sites are unaffected.
+         * @var string
+         */
+        public $payment_flow;
+
         public function __construct() {
 
             // Setup general properties.
@@ -79,6 +98,7 @@ function init_barterpay_gateway() {
             $this->enable_for_virtual = $this->get_option( 'enable_for_virtual', 'yes' ) === 'yes';
             $this->enable_custom_redirect = $this->get_option( 'enable_custom_redirect', 'no' );
             $this->custom_redirect_url = $this->get_option( 'custom_redirect_url', '' );
+            $this->payment_flow = $this->get_option( 'payment_flow', 'hosted' );
             // Add block support declaration
             $this->supports = array(
                 'products',
@@ -166,6 +186,17 @@ function init_barterpay_gateway() {
                     'type'    => 'checkbox',
                     'label'   => __( 'Enable Sandbox Mode', 'barterpay' ),
                     'default' => 'yes',
+                ),
+                'payment_flow' => array(
+                    'title'       => __( 'Payment Flow', 'barterpay' ),
+                    'type'        => 'select',
+                    'description' => __( 'Hosted Payments redirects customers to BarterPay to complete payment. Widget Payments shows an embedded payment form directly on your checkout page via iframe. Defaults to Hosted Payments — existing sites are unaffected unless you change this.', 'barterpay' ),
+                    'default'     => 'hosted',
+                    'options'     => array(
+                        'hosted' => __( 'Hosted Payments (Redirect to BarterPay)', 'barterpay' ),
+                        'widget' => __( 'Widget Payments (Embedded iframe on checkout)', 'barterpay' ),
+                    ),
+                    'desc_tip'    => true,
                 ),
                 'enable_logs' => array(
                     'title'       => __( 'Enable Logs', 'barterpay' ),
@@ -389,7 +420,7 @@ function init_barterpay_gateway() {
 
             if ( is_wp_error( $response ) ) {
                 wc_add_notice( __( 'Payment error: Unable to connect to BarterPay.', 'barterpay' ), 'error' );
-                return;
+                return array( 'result' => 'fail' );
             }
 
             $body   = wp_remote_retrieve_body( $response );
@@ -405,15 +436,30 @@ function init_barterpay_gateway() {
                         update_post_meta( $order_id, '_barterpay_api_txn_index', sanitize_text_field( $result['transactionIndex'] ) );
                     }
                 }
-                // Optionally, update the order status to on-hold until the callback confirms the payment.
+                // Update the order status to on-hold until payment is confirmed.
                 $order->update_status( 'on-hold', __( 'Awaiting BarterPay payment confirmation.', 'barterpay' ) );
+
+                // Widget flow: store the BarterPay redirect URL in order meta so the frontend
+                // AJAX handler can retrieve it, then return a hash-only redirect so WooCommerce
+                // JS sets window.location.hash (no page reload) and our widget JS intercepts it.
+                if ( 'widget' === $this->payment_flow ) {
+                    $order->update_meta_data( '_barterpay_widget_url', esc_url_raw( $result['redirectUrl'] ) );
+                    $order->save();
+                    barterpay_log_callback( sprintf( 'Order %d: Widget flow — stored widget URL, returning hash redirect.', $order_id ) );
+                    return array(
+                        'result'   => 'success',
+                        'redirect' => '#barterpay-widget-' . $order_id,
+                    );
+                }
+
+                // Hosted flow (default): redirect customer to BarterPay hosted page.
                 return array(
                     'result'   => 'success',
                     'redirect' => $result['redirectUrl']
                 );
             } else {
                 wc_add_notice( __( 'Payment error: Invalid response from BarterPay.', 'barterpay' ), 'error' );
-                return;
+                return array( 'result' => 'fail' );
             }
         }
 
@@ -1535,6 +1581,191 @@ function barterpay_order_meta_box_content( $post_or_order ) {
         echo '<p><strong>' . __( 'External Transaction ID:', 'barterpay' ) . '</strong><br>';
         echo '<code style="font-size: 11px; word-break: break-all;">' . esc_html( $external_txn_id ) . '</code></p>';
     }
-    
+
     echo '</div>';
+}
+
+// ============================================================
+// Widget Payment Flow — frontend script + AJAX handlers
+// ============================================================
+
+/**
+ * Enqueue the widget JS on checkout and order-pay pages when widget flow is active.
+ */
+add_action( 'wp_enqueue_scripts', 'barterpay_enqueue_widget_scripts' );
+function barterpay_enqueue_widget_scripts() {
+    if ( ! is_checkout() && ! is_wc_endpoint_url( 'order-pay' ) ) {
+        return;
+    }
+
+    $gateway = new WC_Gateway_BarterPay();
+    if ( 'widget' !== $gateway->get_option( 'payment_flow', 'hosted' ) ) {
+        return;
+    }
+
+    wp_enqueue_script(
+        'barterpay-widget',
+        plugins_url( 'js/barterpay-widget.js', __FILE__ ),
+        array( 'jquery' ),
+        '1.4.5',
+        true
+    );
+
+    wp_localize_script( 'barterpay-widget', 'barterpayWidget', array(
+        'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+        'nonce'   => wp_create_nonce( 'barterpay_widget' ),
+        'i18n'    => array(
+            'processing'  => __( 'Processing Payment', 'barterpay' ),
+            'pleaseWait'  => __( 'Please wait while we process your payment...', 'barterpay' ),
+            'declined'    => __( 'Payment Declined', 'barterpay' ),
+            'declinedMsg' => __( 'Your payment was declined. Please try again.', 'barterpay' ),
+        ),
+    ) );
+}
+
+/**
+ * AJAX: Return the stored BarterPay widget URL and redirect URLs for a widget-flow order.
+ */
+add_action( 'wp_ajax_barterpay_get_widget_data', 'barterpay_get_widget_data_callback' );
+add_action( 'wp_ajax_nopriv_barterpay_get_widget_data', 'barterpay_get_widget_data_callback' );
+function barterpay_get_widget_data_callback() {
+    if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'barterpay_widget' ) ) {
+        wp_send_json_error( array( 'message' => 'Security check failed.' ) );
+    }
+
+    if ( ! isset( $_POST['order_id'] ) ) {
+        wp_send_json_error( array( 'message' => 'Missing order_id.' ) );
+    }
+
+    $order_id = absint( $_POST['order_id'] );
+    $order    = wc_get_order( $order_id );
+
+    if ( ! $order || $order->get_payment_method() !== 'barterpay' ) {
+        wp_send_json_error( array( 'message' => 'Invalid order.' ) );
+    }
+
+    $widget_url = $order->get_meta( '_barterpay_widget_url', true );
+    if ( empty( $widget_url ) ) {
+        wp_send_json_error( array( 'message' => 'Widget URL not found for this order.' ) );
+    }
+
+    // Build confirmation (success) URL — respects custom redirect setting.
+    $gateway = new WC_Gateway_BarterPay();
+    if ( 'yes' === $gateway->get_option( 'enable_custom_redirect' ) && ! empty( $gateway->get_option( 'custom_redirect_url' ) ) ) {
+        $confirmation_url = str_replace(
+            array( '{order_key}', '{order_id}' ),
+            array( $order->get_order_key(), $order_id ),
+            $gateway->get_option( 'custom_redirect_url' )
+        );
+    } else {
+        $confirmation_url = $order->get_checkout_order_received_url();
+    }
+
+    // The WooCommerce "pay for order" URL lets the customer retry on the same order.
+    $pay_url = $order->get_checkout_payment_url( true );
+
+    barterpay_log_callback( sprintf( 'Widget: get_widget_data for order %d. Widget URL: %s', $order_id, $widget_url ) );
+
+    wp_send_json_success( array(
+        'widget_url'       => $widget_url,
+        'confirmation_url' => $confirmation_url,
+        'pay_url'          => $pay_url,
+    ) );
+}
+
+/**
+ * AJAX: Poll transaction status for the widget flow (called every 2 seconds by frontend JS).
+ * Supports both callback and polling verification methods.
+ */
+add_action( 'wp_ajax_barterpay_widget_status', 'barterpay_widget_status_callback' );
+add_action( 'wp_ajax_nopriv_barterpay_widget_status', 'barterpay_widget_status_callback' );
+function barterpay_widget_status_callback() {
+    if ( ! isset( $_POST['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ) ), 'barterpay_widget' ) ) {
+        wp_send_json_error( array( 'message' => 'Security check failed.' ) );
+    }
+
+    if ( ! isset( $_POST['order_id'] ) ) {
+        wp_send_json_error( array( 'message' => 'Missing order_id.' ) );
+    }
+
+    $order_id = absint( $_POST['order_id'] );
+
+    // Clear caches so we always read the latest status.
+    wp_cache_delete( 'order-' . $order_id, 'orders' );
+    wp_cache_delete( $order_id, 'post_meta' );
+
+    $order = wc_get_order( $order_id );
+    if ( ! $order ) {
+        wp_send_json_error( array( 'message' => 'Invalid order.' ) );
+    }
+
+    $gateway             = new WC_Gateway_BarterPay();
+    $verification_method = $gateway->get_option( 'verification_method', 'callback' );
+
+    barterpay_log_callback( sprintf( 'Widget status poll: order %d, verification_method=%s', $order_id, $verification_method ) );
+
+    // Polling mode: ask the BarterPay API directly.
+    if ( 'polling' === $verification_method ) {
+        $transaction_index = $order->get_meta( '_barterpay_api_txn_index', true );
+
+        if ( ! empty( $transaction_index ) ) {
+            $api_key  = $gateway->get_option( 'api_key' );
+            $sandbox  = $gateway->get_option( 'sandbox' );
+            $endpoint = 'yes' === $sandbox
+                ? 'https://test-api.getbarterpay.com/api/pay/m-api/check-transaction-status'
+                : 'https://api.getbarterpay.com/api/pay/m-api/check-transaction-status';
+
+            $url      = add_query_arg( 'TransactionIndex', $transaction_index, $endpoint );
+            $response = wp_remote_get( $url, array(
+                'timeout' => 15,
+                'headers' => array( 'X-SAO-Token' => $api_key ),
+            ) );
+
+            if ( ! is_wp_error( $response ) ) {
+                $body   = wp_remote_retrieve_body( $response );
+                $result = json_decode( $body, true );
+
+                barterpay_log_callback( sprintf( 'Widget status poll: API response for order %d: %s', $order_id, $body ) );
+
+                if ( isset( $result['transactionStatus'] ) ) {
+                    $api_status = strtolower( $result['transactionStatus'] );
+                    $api_amount = isset( $result['transactionAmount'] ) ? floatval( $result['transactionAmount'] ) : 0;
+
+                    if ( in_array( $api_status, array( 'completed', 'success' ), true ) && ! $order->is_paid() ) {
+                        $order->payment_complete( $transaction_index );
+                        $order->add_order_note( sprintf(
+                            __( 'Payment confirmed via BarterPay widget polling. Amount: %s, Transaction Index: %s', 'barterpay' ),
+                            wc_price( $api_amount, array( 'currency' => $order->get_currency() ) ),
+                            esc_html( $transaction_index )
+                        ) );
+                        barterpay_log_callback( sprintf( 'Widget status poll: Order %d marked as PAID.', $order_id ) );
+                        wp_send_json_success( array( 'status' => 'paid' ) );
+                    } elseif ( in_array( $api_status, array( 'failed', 'cancelled', 'expired' ), true ) ) {
+                        if ( ! $order->has_status( 'failed' ) ) {
+                            $order->update_status( 'failed', sprintf(
+                                __( 'Payment %s via BarterPay widget polling. Transaction Index: %s', 'barterpay' ),
+                                $api_status,
+                                esc_html( $transaction_index )
+                            ) );
+                        }
+                        barterpay_log_callback( sprintf( 'Widget status poll: Order %d marked as FAILED (%s).', $order_id, $api_status ) );
+                        wp_send_json_success( array( 'status' => 'failed' ) );
+                    }
+                }
+            }
+        }
+    }
+
+    // Callback mode (or polling with no result yet): check the WooCommerce order status.
+    $order_status = $order->get_status();
+
+    if ( $order->is_paid() || in_array( $order_status, array( 'completed', 'processing' ), true ) ) {
+        barterpay_log_callback( sprintf( 'Widget status poll: Order %d is PAID (status: %s).', $order_id, $order_status ) );
+        wp_send_json_success( array( 'status' => 'paid' ) );
+    } elseif ( in_array( $order_status, array( 'failed', 'cancelled' ), true ) ) {
+        barterpay_log_callback( sprintf( 'Widget status poll: Order %d is FAILED (status: %s).', $order_id, $order_status ) );
+        wp_send_json_success( array( 'status' => 'failed' ) );
+    } else {
+        wp_send_json_success( array( 'status' => 'pending' ) );
+    }
 }
